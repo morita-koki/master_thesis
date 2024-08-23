@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import tqdm
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 import os
+import yaml
+import fire
 
 
 @torch.jit.script
@@ -76,6 +78,43 @@ class Map:
         self.y_lim = [-y_range / 2, y_range / 2]  # [m]
 
         # * inner variables
+        self._circle_obstacles: List[Map.CircleObstacle] = []
+        self._rectangle_obstacles: List[Map.RectangleObstacle] = []
+
+    def load_from_png(self, path: str, cell_size: float = 0.01) -> None:
+        """
+        Load map from png file
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{path} does not exist.")
+
+        if not path.endswith(".png"):
+            raise ValueError(f"{path} is not a png file.")
+
+        self._cell_size = cell_size
+
+        img = plt.imread(path)
+        # white is free space, black is obstacle
+        img = img[:, :, 0]  # only use one channel
+        img = 1 - img  # invert the color
+        img = img.astype(int)
+
+        self._map = img
+
+        cell_map_dim = self._map.shape
+        self._cell_map_origin = np.array(
+            [cell_map_dim[0] / 2, cell_map_dim[1] / 2]
+        ).astype(int)
+
+        self._torch_cell_map_origin = torch.from_numpy(self._cell_map_origin).to(
+            self._device, self._dtype
+        )
+
+        x_range = self._cell_size * self._map.shape[0]
+        y_range = self._cell_size * self._map.shape[1]
+        self.x_lim = [-x_range / 2, x_range / 2]  # [m]
+        self.y_lim = [-y_range / 2, y_range / 2]  # [m]
+
         self._circle_obstacles: List[Map.CircleObstacle] = []
         self._rectangle_obstacles: List[Map.RectangleObstacle] = []
 
@@ -190,7 +229,12 @@ class Map:
 
 class Environment:
     def __init__(
-        self, device=torch.device("cuda"), dtype=torch.float32, seed: int = 42
+        self,
+        device=torch.device("cuda"),
+        dtype=torch.float32,
+        seed: int = 42,
+        map_path: str = None,
+        cell_size: float = 0.01,
     ) -> None:
         # * device
         if torch.cuda.is_available() and device == torch.device("cuda"):
@@ -202,29 +246,36 @@ class Environment:
         self._dtype = dtype
         self._seed = seed
 
-        # * start and goal position
-        self._start_pos = torch.tensor(
-            [-9.0, -9.0], device=self._device, dtype=self._dtype
-        )
-        self._goal_pos = torch.tensor(
-            [9.0, 9.0], device=self._device, dtype=self._dtype
-        )
-
         # * map
         self._map = Map(device=self._device, dtype=self._dtype)
-        generate_random_obstacles(
-            self._map,
-            random_x_range=(-8.0, 8.0),
-            random_y_range=(-8.0, 8.0),
-            num_circle_obs=0,
-            radius_range=(1, 1),
-            num_rectangle_obs=10,
-            width_range=(2, 2),
-            height_range=(2, 2),
-            max_iteration=1000,
-            seed=self._seed,
-        )
+        if map_path is None:
+            generate_random_obstacles(
+                self._map,
+                random_x_range=(-8.0, 8.0),
+                random_y_range=(-8.0, 8.0),
+                num_circle_obs=0,
+                radius_range=(1, 1),
+                num_rectangle_obs=10,
+                width_range=(2, 2),
+                height_range=(2, 2),
+                max_iteration=1000,
+                seed=self._seed,
+            )
+        else:
+            self._map.load_from_png(path=map_path, cell_size=cell_size)
         self._map.convert_to_torch()
+
+        # * start and goal position
+        self._start_pos = torch.tensor(
+            [self._map.x_lim[0] * 0.9, self._map.y_lim[0] * 0.9],
+            device=self._device,
+            dtype=self._dtype,
+        )
+        self._goal_pos = torch.tensor(
+            [self._map.x_lim[1] * 0.9, self._map.y_lim[1] * 0.9],
+            device=self._device,
+            dtype=self._dtype,
+        )
 
         # * Robot state
         self._robot_state = torch.zeros(3, device=self._device, dtype=self._dtype)
@@ -346,7 +397,9 @@ class Environment:
             # mkdir video if not exists
             if not os.path.exists("video"):
                 os.mkdir("video")
-            path = "video/" + "navigation_2d_" + str(self._seed) + ".gif"
+            path = "video/" + "output" + str(self._seed) + ".gif"
+        else:
+            path = os.path.join(os.path.dirname(__file__), path)
 
         if len(self._rendered_frames) > 0:
             # save animation
@@ -739,17 +792,23 @@ class MPPI:
         return top_samples, top_weights
 
 
-save_mode = True
+def main(config: str = "conf.yaml"):
+    with open(config, "r") as fp:
+        conf = yaml.load(fp, Loader=yaml.SafeLoader)
 
-
-def main():
     # * environment
-    env = Environment()
+    env = Environment(
+        seed=conf["environment"]["seed"],
+        map_path=os.path.join(
+            os.path.dirname(__file__), conf["environment"]["map"]["path"]
+        ),
+        cell_size=conf["environment"]["map"]["cell_size"],
+    )
 
     # * solver
     solver = MPPI(
-        horizon=50,
-        num_samples=1000,
+        horizon=conf["mppi"]["horizon"],
+        num_samples=conf["mppi"]["num_samples"],
         dim_state=3,
         dim_control=2,
         dynamics=env.dynamics,
@@ -757,8 +816,8 @@ def main():
         terminal_cost=env.terminal_cost,
         u_min=env.u_min,
         u_max=env.u_max,
-        sigmas=torch.Tensor([0.5, 0.5]),
-        lambda_=1.0,
+        sigmas=torch.Tensor(conf["mppi"]["sigmas"]),
+        lambda_=conf["mppi"]["lambda"],
     )
 
     state = env.reset()
@@ -779,7 +838,7 @@ def main():
 
         top_samples, top_weights = solver.get_top_samples(num_samples=100)
 
-        if save_mode:
+        if conf["save"]:
             env.render(
                 predicted_trajectory=state_seq,
                 is_collisions=is_collisions,
@@ -802,8 +861,8 @@ def main():
             print("Goal Reached!")
             break
 
-    env.close()
+    env.close(path=conf["output_gif"])
 
 
 if __name__ == "__main__":
-    main()
+    fire.Fire(main)

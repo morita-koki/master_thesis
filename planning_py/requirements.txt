@@ -5,3 +5,4 @@ torch==2.0.0
 torchvision==0.15.1
 gymnasium[all]==0.29.1
 mujoco==2.3.7
+PyYAML==6.0.2
