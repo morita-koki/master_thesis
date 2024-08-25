@@ -83,12 +83,12 @@ class Map:
         self._cell_size = cell_size
 
         img = plt.imread(path)
-        # white is free space, black is obstacle
-        img = img[:, :, 0]  # only use one channel
         self._origin_map = img.copy()
-        self._map = img.copy()
-        self._map[img == 0] = 1
-        self._map[img != 0] = 0
+        # white is free space, black is obstacle
+        img_r = np.fliplr(img[:, :, 0].T)  # only use one channel
+        self._map = img_r.copy()
+        self._map[img_r == 0] = 1
+        self._map[img_r != 0] = 0
         self._map.astype(int)
 
         cell_map_dim = self._map.shape
@@ -198,7 +198,7 @@ class Map:
         # render map
         ax.imshow(
             # (-1) * self._map.T,
-            self._origin_map.T,
+            self._origin_map,
             cmap="gray",
             extent=[
                 self.x_lim[0],

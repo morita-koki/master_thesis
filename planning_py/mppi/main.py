@@ -39,7 +39,7 @@ def main(config: str = "conf.yaml"):
 
     state = env.reset()
 
-    max_steps = 500
+    max_steps = conf["max_steps"]
     # average_time = 0
 
     for i in range(max_steps):
@@ -54,7 +54,6 @@ def main(config: str = "conf.yaml"):
         is_collisions = env.collision_check(state=state_seq)
 
         top_samples, top_weights = solver.get_top_samples(num_samples=100)
-
         if conf["save"]:
             env.render(
                 predicted_trajectory=state_seq,
@@ -73,6 +72,9 @@ def main(config: str = "conf.yaml"):
                 top_samples=(top_samples, top_weights),
                 mode="human",
             )
+            if i == 0:
+                pbar = tqdm.tqdm(total=max_steps, desc="running simulation")
+            pbar.update(1)
 
         if is_goal_reached:
             print("Goal Reached!")

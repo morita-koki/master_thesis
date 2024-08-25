@@ -1,12 +1,12 @@
 max_steps: 1000
 save: true
-output_gif: video/cross.gif
+output_gif: video/maze.gif
 
 environment:
   name: navigation_2d
   seed: 42
   map:
-    path: maps/cross.png
+    path: maps/maze.png
     cell_size: 0.02
 
 mppi:
